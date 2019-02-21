@@ -68,17 +68,22 @@ init(Parent, Protocol, Request, Fun) ->
     proc_lib:init_ack(Parent, {ok, self()}),
     DNSMessage = #dns_message{} = dns:decode_message(Request),
     Questions = DNSMessage#dns_message.questions,
-    case dcos_dns_router:upstreams_from_questions(Questions) of
+    StartTime = erlang:monotonic_time(millisecond),
+    {Upstreams, Zone} = dcos_dns_router:upstreams_from_questions(Questions),
+    case Upstreams of
         [] ->
             report_status([?APP, no_upstreams_available]),
             Response = failed_msg(Protocol, DNSMessage),
-            ok = reply(Fun, Response);
+            ok = reply(Fun, Response),
+            prometheus_counter:inc(dns_forwarder_failures_total, [Zone, no_upstream]);
         internal ->
             Response = internal_resolve(Protocol, DNSMessage),
-            ok = reply(Fun, Response);
-        Upstreams ->
+            ok = reply(Fun, Response),
+            report_query_response_time(StartTime, Zone);
+        _ ->
             Upstreams0 = take_upstreams(Upstreams),
-            resolve(Protocol, Upstreams0, Request, Fun)
+            resolve(Protocol, Upstreams0, Request, Fun, Zone),
+            report_query_response_time(StartTime, Zone)
     end.
 
 -spec(reply(reply_fun(), binary()) -> ok | {error, term()}).
@@ -111,20 +116,21 @@ internal_resolve(Protocol, DNSMessage) ->
     Response = erldns_handler:do_handle(DNSMessage, ?LOCALHOST),
     encode_message(Protocol, Response).
 
--spec(resolve(protocol(), [upstream()], binary(), reply_fun()) -> ok).
-resolve(Protocol, Upstreams, Request, Fun) ->
+-spec(resolve(protocol(), [upstream()], binary(), reply_fun(), any())-> ok).
+resolve(Protocol, Upstreams, Request, Fun, Zone) ->
     Workers =
         lists:map(fun (Upstream) ->
             Pid = start_worker(Protocol, Upstream, Request),
             MonRef = monitor(process, Pid),
             {Upstream, Pid, MonRef}
         end, Upstreams),
-    resolve_loop(Workers, Fun).
+    resolve_loop(Workers, Fun, Zone).
 
--spec(resolve_loop([{upstream(), pid(), reference()}], reply_fun()) -> ok).
-resolve_loop([], _Fun) ->
+% TODO spec a zone
+-spec(resolve_loop([{upstream(), pid(), reference()}], reply_fun(), any()) -> ok).
+resolve_loop([], _Fun, _Zone) ->
     ok;
-resolve_loop(Workers, Fun) ->
+resolve_loop(Workers, Fun, Zone) ->
     receive
         {reply, Pid, Response} ->
             {value, {Upstream, Pid, MonRef}, Workers0} =
@@ -132,18 +138,19 @@ resolve_loop(Workers, Fun) ->
             reply(Fun, Response),
             erlang:demonitor(MonRef, [flush]),
             report_status([?MODULE, Upstream, successes]),
-            resolve_loop(Workers0, fun ok_reply_fun/1);
+            resolve_loop(Workers0, fun ok_reply_fun/1, Zone);
         {'DOWN', MonRef, process, Pid, _Reason} ->
             {value, {Upstream, Pid, MonRef}, Workers0} =
                 lists:keytake(Pid, 2, Workers),
             report_status([?MODULE, Upstream, failures]),
-            resolve_loop(Workers0, Fun)
+            resolve_loop(Workers0, Fun, Zone)
     after 2 * ?TIMEOUT ->
         lists:foreach(fun ({Upstream, Pid, MonRef}) ->
             erlang:demonitor(MonRef, [flush]),
             report_status([?MODULE, Upstream, failures]),
             Pid ! {timeout, self()}
-        end, Workers)
+        end, Workers),
+        prometheus_counter:inc(dns_forwarder_failures_total, [Zone, timeout])
     end.
 
 %%%===================================================================
@@ -245,11 +252,13 @@ tcp_worker(StartTime, Pid, Socket, Upstream) ->
 -spec(report_latency([term()], pos_integer()) -> ok).
 report_latency(Metric, StartTime) ->
     Diff = max(erlang:monotonic_time(millisecond) - StartTime, 0),
-    dcos_dns_metrics:update(Metric, Diff, ?HISTOGRAM),
-    prometheus_histogram:observe(dns_forwarder_requests_duration_seconds,
-                                 [<<".dns">>],
-                                 Diff/1000).
+    dcos_dns_metrics:update(Metric, Diff, ?HISTOGRAM).
 
+report_query_response_time(StartTime, Zone) ->
+    Diff = max(erlang:monotonic_time(millisecond) - StartTime, 0),
+    DiffSeconds = Diff/1000,
+    prometheus_histogram:observe(dns_forwarder_requests_duration_seconds,
+                                 [Zone], DiffSeconds).
 %%%===================================================================
 %%% Upstreams functions
 %%%===================================================================

@@ -10,10 +10,10 @@
 -export([upstreams_from_questions/1]).
 
 %% @doc Resolvers based on a set of "questions"
--spec(upstreams_from_questions(dns:questions()) -> [upstream()] | internal).
+-spec(upstreams_from_questions(dns:questions()) -> {[upstream()] | internal, binary()}).
 upstreams_from_questions([#dns_query{name=Name}]) ->
     Labels = dcos_dns_app:parse_upstream_name(Name),
-    find_upstream(Labels);
+    find_upstream_zone(Labels);
 upstreams_from_questions([Question|Others]) ->
     %% There is more than one question. This is beyond our capabilities at the moment
     dcos_dns_metrics:update([dcos_dns, ignored_questions], length(Others), ?COUNTER),
@@ -37,25 +37,28 @@ default_resolvers() ->
     lists:map(fun validate_upstream/1, Resolvers).
 
 %% @private
--spec(find_upstream(Labels :: [binary()]) -> [upstream()] | internal).
-find_upstream([<<"mesos">>|_]) ->
-    dcos_dns_config:mesos_resolvers();
-find_upstream([<<"localhost">>|_]) ->
-    internal;
-find_upstream([<<"zk">>|_]) ->
-    internal;
-find_upstream([<<"spartan">>|_]) ->
-    internal;
-find_upstream([<<"directory">>, <<"thisdcos">>|_]) ->
-    internal;
-find_upstream([<<"global">>, <<"thisdcos">>|_]) ->
-    internal;
-find_upstream([<<"directory">>, <<"dcos">>|_]) ->
-    internal;
-find_upstream(Labels) ->
+-spec(find_upstream_zone(Labels :: [binary()]) -> {[upstream()] | internal, binary()}).
+find_upstream_zone([<<"fabs">>|_]) ->
+    {[], <<".fabs">>};
+find_upstream_zone([<<"mesos">>|_]) ->
+   {dcos_dns_config:mesos_resolvers(), <<".mesos">>};
+find_upstream_zone([<<"localhost">>|_]) ->
+    {internal, <<".localhost">>};
+find_upstream_zone([<<"zk">>|_]) ->
+    {internal, <<".zk">>};
+find_upstream_zone([<<"spartan">>|_]) ->
+    {internal, <<".spartan">>};
+find_upstream_zone([<<"directory">>, <<"thisdcos">>|_]) ->
+    {internal, <<"thisdcos.directory">>};
+find_upstream_zone([<<"global">>, <<"thisdcos">>|_]) ->
+    {internal, <<"thisdcos.global">>};
+find_upstream_zone([<<"directory">>, <<"dcos">>|_]) ->
+    {internal, <<"dcos.directory">>};
+find_upstream_zone(Labels) ->
     case find_custom_upstream(Labels) of
         [] ->
-            default_resolvers();
+            % should I expand on custom?
+            {default_resolvers(), "custom"};
         Resolvers ->
             lager:debug("resolving ~p with custom upstream: ~p", [Labels, Resolvers]),
             Resolvers
