@@ -28,7 +28,7 @@ start(Protocol, Request, Fun) ->
                                         ?MODULE, start_link, Args) of
         {error, Error} ->
             lager:error("Unexpected error: ~p", [Error]),
-            {error, Error};
+          {error, Error};
         {ok, Pid} ->
             {ok, Pid}
     end.
@@ -245,7 +245,10 @@ tcp_worker(StartTime, Pid, Socket, Upstream) ->
 -spec(report_latency([term()], pos_integer()) -> ok).
 report_latency(Metric, StartTime) ->
     Diff = max(erlang:monotonic_time(millisecond) - StartTime, 0),
-    dcos_dns_metrics:update(Metric, Diff, ?HISTOGRAM).
+    dcos_dns_metrics:update(Metric, Diff, ?HISTOGRAM),
+    prometheus_histogram:observe(dns_forwarder_requests_duration_seconds,
+                                 [<<".dns">>],
+                                 Diff/1000).
 
 %%%===================================================================
 %%% Upstreams functions

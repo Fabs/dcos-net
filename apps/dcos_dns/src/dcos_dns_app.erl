@@ -27,7 +27,8 @@ start(_StartType, _StartArgs) ->
                             {help, "Number of failed DNS queries forwarded to `forwarder` at `zone`"}]),
     prometheus_histogram:new([{name, dns_forwarder_requests_duration_seconds},
                               {labels, [zone]},
-                              {buckets, [1,5,10,50,100,500,1000,5000]},
+                              {duration_unit, false},
+                              {buckets, [0.001, 0.005, 0.010, 0.050, 0.100, 0.500, 1.000, 5.000]},
                               {help, "Duration of successful DNS queries"}]),
     dcos_net_app:load_config_files(dcos_dns),
     maybe_load_json_config(), %% Maybe load the relevant DCOS configuration
