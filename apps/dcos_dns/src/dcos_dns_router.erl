@@ -10,7 +10,7 @@
 -export([upstreams_from_questions/1]).
 
 %% @doc Resolvers based on a set of "questions"
--spec(upstreams_from_questions(dns:questions()) -> {[upstream()] | internal, binary()}).
+-spec(upstreams_from_questions(dns:questions()) -> dns_forward()).
 upstreams_from_questions([#dns_query{name=Name}]) ->
     Labels = dcos_dns_app:parse_upstream_name(Name),
     {Up, Zone} = find_upstream_zone(Labels),
@@ -40,7 +40,7 @@ default_resolvers() ->
     lists:map(fun validate_upstream/1, Resolvers).
 
 %% @private
--spec(find_upstream_zone(Labels :: [binary()]) -> {[upstream()] | internal, binary()}).
+-spec(find_upstream_zone(Labels :: [binary()]) -> dns_forward()).
 find_upstream_zone([<<"mesos">>|_]) ->
    {dcos_dns_config:mesos_resolvers(), <<"mesos">>};
 find_upstream_zone([<<"localhost">>|_]) ->
