@@ -10,12 +10,10 @@
 -export([upstreams_from_questions/1]).
 
 %% @doc Resolvers based on a set of "questions"
--spec(upstreams_from_questions(dns:questions()) -> dns_forward()).
+-spec(upstreams_from_questions(dns:questions()) -> forward()).
 upstreams_from_questions([#dns_query{name=Name}]) ->
     Labels = dcos_dns_app:parse_upstream_name(Name),
-    {Up, Zone} = find_upstream_zone(Labels),
-    lager:notice("Upstream ~p ~n", [Zone]),
-    {Up, Zone};
+    find_upstream_zone(Labels);
 
 upstreams_from_questions([Question|Others]) ->
     %% There is more than one question. This is beyond our capabilities at the moment
@@ -39,45 +37,53 @@ default_resolvers() ->
     Resolvers = application:get_env(?APP, upstream_resolvers, Defaults),
     lists:map(fun validate_upstream/1, Resolvers).
 
+%% .
+%% zk.
+%% localhost.
+%% spartan.
+%% (dcos|l4lb|thisnode|component|mesos|dclb).thisdcos.directory.
+%% (dcos|l4lb|thisnode|component|mesos|dclb).<id>.dcos.directory.
+%% dclb.thisdcos.global.
 %% @private
--spec(find_upstream_zone(Labels :: [binary()]) -> dns_forward()).
+-spec(find_upstream_zone(Labels :: [binary()]) -> forward()).
 find_upstream_zone([<<"mesos">>|_]) ->
-   {dcos_dns_config:mesos_resolvers(), <<"mesos">>};
+   {dcos_dns_config:mesos_resolvers(), <<"mesos.">>};
 find_upstream_zone([<<"localhost">>|_]) ->
-    {internal, <<"localhost">>};
+    {internal, <<"localhost.">>};
 find_upstream_zone([<<"zk">>|_]) ->
-    {internal, <<"zk">>};
+    {internal, <<"zk.">>};
 find_upstream_zone([<<"spartan">>|_]) ->
-    {internal, <<"spartan">>};
-find_upstream_zone([<<"directory">>, <<"thisdcos">>|_]) ->
-    {internal, <<"thisdcos.directory">>};
-find_upstream_zone([<<"global">>, <<"thisdcos">>|_]) ->
-    {internal, <<"thisdcos.global">>};
-find_upstream_zone([<<"directory">>, <<"dcos">>|_]) ->
-    {internal, <<"dcos.directory">>};
+    {internal, <<"spartan.">>};
+find_upstream_zone([<<"directory">>, <<"thisdcos">>, Zone |_]) ->
+    % care about the cripto id
+    {internal, <<Zone/binary, "thisdcos.directory.">>};
+find_upstream_zone([<<"global">>, <<"thisdcos">>, Zone |_]) ->
+    {internal, <<Zone/binary, "thisdcos.global.">>};
+find_upstream_zone([<<"directory">>, <<"dcos">>, Zone |_]) ->
+    {internal, <<Zone/binary, "dcos.directory.">>};
 find_upstream_zone(Labels) ->
     case find_custom_upstream(Labels) of
-        [] ->
-            % should I expand on custom?
-            {default_resolvers(), <<"default">>};
-        Resolvers ->
+        {[], Zone} ->
+            {default_resolvers(), Zone};
+        {Resolvers, Zone} ->
             lager:debug("resolving ~p with custom upstream: ~p", [Labels, Resolvers]),
-            {Resolvers, <<"custom">>}
+            {Resolvers, Zone}
     end.
 
--spec(find_custom_upstream(Labels :: [binary()]) -> [upstream()]).
+-spec(find_custom_upstream(Labels :: [binary()]) -> forward()).
 find_custom_upstream(QueryLabels) ->
     ForwardZones = dcos_dns_config:forward_zones(),
     UpstreamFilter = upstream_filter_fun(QueryLabels),
-    maps:fold(UpstreamFilter, [], ForwardZones).
+    maps:fold(UpstreamFilter, {[], <<".">>}, ForwardZones).
 
 -spec(upstream_filter_fun([dns:labels()]) ->
-    fun(([dns:labels()], upstream(), [upstream()]) -> [upstream()])).
+    fun(([dns:labels()], upstream(), [upstream()]) -> forward())).
 upstream_filter_fun(QueryLabels) ->
-    fun(Labels, Upstream, Acc) ->
-        case lists:prefix(Labels, QueryLabels) of
+    fun(ZoneLabels, Upstream, Acc) ->
+        case lists:prefix(ZoneLabels, QueryLabels) of
             true ->
-                Upstream;
+                Zone = lists:foldr(fun(X,A) -> <<X/binary, ".", A/binary>> end, <<"">>, ZoneLabels),
+                {Upstream, Zone};
             false ->
                 Acc
         end

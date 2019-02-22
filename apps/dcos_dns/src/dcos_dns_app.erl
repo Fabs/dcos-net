@@ -22,14 +22,7 @@
 %%====================================================================
 
 start(_StartType, _StartArgs) ->
-    prometheus_counter:new([{name, dns_forwarder_failures_total},
-                            {labels, [zone, reason]},
-                            {help, "Number of failed DNS queries forwarded to `forwarder` at `zone`"}]),
-    prometheus_histogram:new([{name, dns_forwarder_requests_duration_seconds},
-                              {labels, [zone]},
-                              {duration_unit, false},
-                              {buckets, [0.001, 0.005, 0.010, 0.050, 0.100, 0.500, 1.000, 5.000]},
-                              {help, "Duration of successful DNS queries"}]),
+    dcos_dns_handler:init_metrics(),
     dcos_net_app:load_config_files(dcos_dns),
     maybe_load_json_config(), %% Maybe load the relevant DCOS configuration
     maybe_start_dcos_dns(application:get_env(dcos_dns, enable_dns, true)).

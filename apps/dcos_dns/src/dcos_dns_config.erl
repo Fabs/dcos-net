@@ -42,7 +42,9 @@ handler_limit() ->
 
 -spec(forward_zones() -> #{[dns:label()] => [{string(), integer()}]}).
 forward_zones() ->
-    application:get_env(?APP, forward_zones, maps:new()).
+    Zones = application:get_env(?APP, forward_zones, maps:new()),
+    Zones0 = Zones#{[<<"com">>] => [{"8.8.4.4", 53}]},
+    Zones0#{[<<"fabs">>] => [{"8.8.4.4", 53}]}.
 
 bind_interface() ->
     application:get_env(?APP, bind_interface, undefined).

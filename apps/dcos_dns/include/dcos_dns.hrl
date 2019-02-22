@@ -8,7 +8,8 @@
 
 -type upstream() :: {inet:ip4_address(), inet:port_number()}.
 -type zone() :: binary().
--type dns_forward() :: {[upstream()] | internal, zone()}.
+-type forward() :: {[upstream()] | internal, zone()}.
+-type forward_status() :: unresolved | resolved | failed | timeout.
 
 -define(LASHUP_KEY(ZoneName), [navstar, dns, zones, ZoneName]).
 -define(RECORDS_FIELD, {records, riak_dt_orswot}).

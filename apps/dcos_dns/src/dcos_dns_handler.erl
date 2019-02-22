@@ -8,7 +8,8 @@
 %% API
 -export([
     start/3,
-    resolve/3
+    resolve/3,
+    init_metrics/0
 ]).
 
 %% Private functions
@@ -65,24 +66,24 @@ start_link(Protocol, Request, Fun) ->
 
 -spec(init(pid(), protocol(), binary(), reply_fun()) -> ok).
 init(Parent, Protocol, Request, Fun) ->
+    StartTime = erlang:monotonic_time(millisecond),
     proc_lib:init_ack(Parent, {ok, self()}),
     DNSMessage = #dns_message{} = dns:decode_message(Request),
     Questions = DNSMessage#dns_message.questions,
-    StartTime = erlang:monotonic_time(millisecond),
     {Upstreams, Zone} = dcos_dns_router:upstreams_from_questions(Questions),
     case Upstreams of
         [] ->
             report_status([?APP, no_upstreams_available]),
             Response = failed_msg(Protocol, DNSMessage),
-            prometheus_counter:inc(dns_forwarder_failures_total, [Zone, no_upstream]),
-            ok = reply(Fun, Response);
+            ok = reply(Fun, Response),
+            prometheus_counter:inc(dns_forwarder_failures_total, [Zone, no_upstream]);
         internal ->
             Response = internal_resolve(Protocol, DNSMessage),
             ok = reply(Fun, Response),
             report_query_response_time(StartTime, Zone);
         _ ->
             Upstreams0 = take_upstreams(Upstreams),
-            internal_resolve(Protocol, Upstreams0, Request, Fun, Zone),
+            external_resolve(Protocol, Upstreams0, Request, Fun, Zone),
             report_query_response_time(StartTime, Zone)
     end.
 
@@ -116,8 +117,8 @@ internal_resolve(Protocol, DNSMessage) ->
     Response = erldns_handler:do_handle(DNSMessage, ?LOCALHOST),
     encode_message(Protocol, Response).
 
--spec(internal_resolve(protocol(), [upstream()], binary(), reply_fun(), binary())-> ok).
-internal_resolve(Protocol, Upstreams, Request, Fun, Zone) ->
+-spec(external_resolve(protocol(), [upstream()], binary(), reply_fun(), zone())-> ok).
+external_resolve(Protocol, Upstreams, Request, Fun, Zone) ->
     Workers =
         lists:map(fun (Upstream) ->
             Pid = start_worker(Protocol, Upstream, Request),
@@ -126,10 +127,16 @@ internal_resolve(Protocol, Upstreams, Request, Fun, Zone) ->
         end, Upstreams),
     resolve_loop(Workers, Fun, Zone).
 
--spec(resolve_loop([{upstream(), pid(), reference()}], reply_fun(), binary()) -> ok).
-resolve_loop([], _Fun, _Zone) ->
-    ok;
+-spec(resolve_loop([{upstream(), pid(), reference()}], reply_fun(), zone()) -> ok).
 resolve_loop(Workers, Fun, Zone) ->
+    resolve_loop(Workers, Fun, Zone, unresolved).
+
+-spec(resolve_loop([{upstream(), pid(), reference()}], reply_fun(), zone(), atom()) -> ok).
+resolve_loop([], _Fun, _Zone, resolved) ->
+    ok;
+resolve_loop([], _Fun, Zone, Status) ->
+    prometheus_counter:inc(dns_forwarder_failures_total, [Zone, Status]);
+resolve_loop(Workers, Fun, Zone, Status) ->
     receive
         {reply, Pid, Response} ->
             {value, {Upstream, Pid, MonRef}, Workers0} =
@@ -137,12 +144,20 @@ resolve_loop(Workers, Fun, Zone) ->
             reply(Fun, Response),
             erlang:demonitor(MonRef, [flush]),
             report_status([?MODULE, Upstream, successes]),
-            resolve_loop(Workers0, fun ok_reply_fun/1, Zone);
+            resolve_loop(Workers0, fun ok_reply_fun/1, Zone, resolved);
+        {timeout, Pid} ->
+            {value, {Upstream, Pid, MonRef}, Workers0} =
+                lists:keytake(Pid, 2, Workers),
+            erlang:demonitor(MonRef, [flush]),
+            report_status([?MODULE, Upstream, failures]),
+            Status0 = resolve_loop_status(Status, timeout),
+            resolve_loop(Workers0, Fun, Zone, Status0);
         {'DOWN', MonRef, process, Pid, _Reason} ->
             {value, {Upstream, Pid, MonRef}, Workers0} =
                 lists:keytake(Pid, 2, Workers),
             report_status([?MODULE, Upstream, failures]),
-            resolve_loop(Workers0, Fun, Zone)
+            Status0 = resolve_loop_status(Status, failure),
+            resolve_loop(Workers0, Fun, Zone, Status0)
     after 2 * ?TIMEOUT ->
         lists:foreach(fun ({Upstream, Pid, MonRef}) ->
             erlang:demonitor(MonRef, [flush]),
@@ -152,6 +167,13 @@ resolve_loop(Workers, Fun, Zone) ->
         prometheus_counter:inc(dns_forwarder_failures_total, [Zone, timeout])
     end.
 
+% Once a Worker resolves, then the status is always going to be resolved
+% otherwise the Status is the most recent resolve failure
+-spec(resolve_loop_status(forward_status(), forward_status()) -> forward_status()).
+resolve_loop_status(resolved, _Status) ->
+    resolved;
+resolve_loop_status(_PreviousStatus, NewStatus) ->
+     NewStatus.
 %%%===================================================================
 %%% Workers
 %%%===================================================================
@@ -198,9 +220,10 @@ udp_worker(StartTime, Pid, Socket, Upstream = {IP, Port}) ->
                 Pid ! {reply, self(), Response},
                 report_latency([?MODULE, Upstream, latency], StartTime);
             {timeout, Pid} ->
-                lager:warning("DNS worker ~p timed out", [Upstream])
+                lager:warning("DNS worker ~p timed out", [Upstream]),
+                Pid ! {timeout, self()}
         after ?TIMEOUT ->
-            ok
+            Pid ! {timeout, self()}
         end
     after
         gen_udp:close(Socket)
@@ -240,9 +263,10 @@ tcp_worker(StartTime, Pid, Socket, Upstream) ->
             {tcp_error, Socket, Reason} ->
                 lager:warning("DNS worker [tcp] ~p failed with ~p", [Upstream, Reason]);
             {timeout, Pid} ->
-                lager:warning("DNS worker [tcp] ~p timed out", [Upstream])
+                lager:warning("DNS worker [tcp] ~p timed out", [Upstream]),
+                Pid ! {timeout, self()}
         after Timeout ->
-            ok
+            Pid ! {timeout, self()}
         end
     after
         gen_tcp:close(Socket)
@@ -348,3 +372,19 @@ max_payload_size(
     PayloadSize;
 max_payload_size(_DNSMessage) ->
     ?MAX_PACKET_SIZE.
+
+%%%===================================================================
+%%% Metrics functions
+%%%===================================================================
+
+-spec(init_metrics() -> ok).
+init_metrics() ->
+    prometheus_counter:new([{name, dns_forwarder_failures_total},
+                            {labels, [zone, reason]},
+                            {help, "Number of failed DNS queries forwarded to `forwarder` at `zone`"}]),
+    prometheus_histogram:new([{name, dns_forwarder_requests_duration_seconds},
+                              {labels, [zone]},
+                              {duration_unit, false},
+                              {buckets, [0.001, 0.005, 0.010, 0.050, 0.100, 0.500, 1.000, 5.000]},
+                              {help, "Duration of successful DNS queries"}]),
+    ok.
