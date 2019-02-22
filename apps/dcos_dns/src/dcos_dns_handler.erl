@@ -28,7 +28,7 @@ start(Protocol, Request, Fun) ->
                                         ?MODULE, start_link, Args) of
         {error, Error} ->
             lager:error("Unexpected error: ~p", [Error]),
-          {error, Error};
+            {error, Error};
         {ok, Pid} ->
             {ok, Pid}
     end.
@@ -74,15 +74,15 @@ init(Parent, Protocol, Request, Fun) ->
         [] ->
             report_status([?APP, no_upstreams_available]),
             Response = failed_msg(Protocol, DNSMessage),
-            ok = reply(Fun, Response),
-            prometheus_counter:inc(dns_forwarder_failures_total, [Zone, no_upstream]);
+            prometheus_counter:inc(dns_forwarder_failures_total, [Zone, no_upstream]),
+            ok = reply(Fun, Response);
         internal ->
             Response = internal_resolve(Protocol, DNSMessage),
             ok = reply(Fun, Response),
             report_query_response_time(StartTime, Zone);
         _ ->
             Upstreams0 = take_upstreams(Upstreams),
-            resolve(Protocol, Upstreams0, Request, Fun, Zone),
+            internal_resolve(Protocol, Upstreams0, Request, Fun, Zone),
             report_query_response_time(StartTime, Zone)
     end.
 
@@ -116,8 +116,8 @@ internal_resolve(Protocol, DNSMessage) ->
     Response = erldns_handler:do_handle(DNSMessage, ?LOCALHOST),
     encode_message(Protocol, Response).
 
--spec(resolve(protocol(), [upstream()], binary(), reply_fun(), any())-> ok).
-resolve(Protocol, Upstreams, Request, Fun, Zone) ->
+-spec(internal_resolve(protocol(), [upstream()], binary(), reply_fun(), binary())-> ok).
+internal_resolve(Protocol, Upstreams, Request, Fun, Zone) ->
     Workers =
         lists:map(fun (Upstream) ->
             Pid = start_worker(Protocol, Upstream, Request),
@@ -126,8 +126,7 @@ resolve(Protocol, Upstreams, Request, Fun, Zone) ->
         end, Upstreams),
     resolve_loop(Workers, Fun, Zone).
 
-% TODO spec a zone
--spec(resolve_loop([{upstream(), pid(), reference()}], reply_fun(), any()) -> ok).
+-spec(resolve_loop([{upstream(), pid(), reference()}], reply_fun(), binary()) -> ok).
 resolve_loop([], _Fun, _Zone) ->
     ok;
 resolve_loop(Workers, Fun, Zone) ->

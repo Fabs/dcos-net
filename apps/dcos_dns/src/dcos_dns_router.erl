@@ -13,7 +13,10 @@
 -spec(upstreams_from_questions(dns:questions()) -> {[upstream()] | internal, binary()}).
 upstreams_from_questions([#dns_query{name=Name}]) ->
     Labels = dcos_dns_app:parse_upstream_name(Name),
-    find_upstream_zone(Labels);
+    {Up, Zone} = find_upstream_zone(Labels),
+    lager:notice("Upstream ~p ~n", [Zone]),
+    {Up, Zone};
+
 upstreams_from_questions([Question|Others]) ->
     %% There is more than one question. This is beyond our capabilities at the moment
     dcos_dns_metrics:update([dcos_dns, ignored_questions], length(Others), ?COUNTER),
@@ -38,16 +41,14 @@ default_resolvers() ->
 
 %% @private
 -spec(find_upstream_zone(Labels :: [binary()]) -> {[upstream()] | internal, binary()}).
-find_upstream_zone([<<"fabs">>|_]) ->
-    {[], <<".fabs">>};
 find_upstream_zone([<<"mesos">>|_]) ->
-   {dcos_dns_config:mesos_resolvers(), <<".mesos">>};
+   {dcos_dns_config:mesos_resolvers(), <<"mesos">>};
 find_upstream_zone([<<"localhost">>|_]) ->
-    {internal, <<".localhost">>};
+    {internal, <<"localhost">>};
 find_upstream_zone([<<"zk">>|_]) ->
-    {internal, <<".zk">>};
+    {internal, <<"zk">>};
 find_upstream_zone([<<"spartan">>|_]) ->
-    {internal, <<".spartan">>};
+    {internal, <<"spartan">>};
 find_upstream_zone([<<"directory">>, <<"thisdcos">>|_]) ->
     {internal, <<"thisdcos.directory">>};
 find_upstream_zone([<<"global">>, <<"thisdcos">>|_]) ->
@@ -58,10 +59,10 @@ find_upstream_zone(Labels) ->
     case find_custom_upstream(Labels) of
         [] ->
             % should I expand on custom?
-            {default_resolvers(), "custom"};
+            {default_resolvers(), <<"default">>};
         Resolvers ->
             lager:debug("resolving ~p with custom upstream: ~p", [Labels, Resolvers]),
-            Resolvers
+            {Resolvers, <<"custom">>}
     end.
 
 -spec(find_custom_upstream(Labels :: [binary()]) -> [upstream()]).
