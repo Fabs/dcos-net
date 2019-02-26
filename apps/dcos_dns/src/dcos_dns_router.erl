@@ -58,9 +58,8 @@ find_upstream_zone(Labels) ->
     case find_custom_upstream(Labels) of
         {[], _ZoneLabels} ->
             {default_resolvers(), <<".">>};
-        {Resolvers, ZoneLabels} ->
+        {Resolvers, Zone} ->
             lager:debug("resolving ~p with custom upstream: ~p", [Labels, Resolvers]),
-            Zone = dcos_net_utils:string_join(ZoneLabels ++ [<<"">>], <<".">>),
             {Resolvers, Zone}
     end.
 
@@ -76,7 +75,8 @@ upstream_filter_fun(QueryLabels) ->
     fun(ZoneLabels, Upstream, Acc) ->
         case lists:prefix(ZoneLabels, QueryLabels) of
             true ->
-                {Upstream, ZoneLabels};
+                Zone = dcos_net_utils:string_join(ZoneLabels, <<".">>),
+                {Upstream, <<Zone/binary, ".">>};
             false ->
                 Acc
         end
