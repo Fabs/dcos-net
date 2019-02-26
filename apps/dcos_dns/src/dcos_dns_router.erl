@@ -51,7 +51,7 @@ find_upstream_zone([<<"directory">>, <<"thisdcos">>, Zone |_]) ->
     % care about the cripto id
     {internal, <<Zone/binary, ".thisdcos.directory.">>};
 find_upstream_zone([<<"global">>, <<"thisdcos">>, Zone |_]) ->
-    {internal, <<Zone/binary, "thisdcos.global.">>};
+    {internal, <<Zone/binary, ".thisdcos.global.">>};
 find_upstream_zone([<<"directory">>, <<"dcos">>, Zone |_]) ->
     {internal, <<Zone/binary, ".dcos.directory.">>};
 find_upstream_zone(Labels) ->
