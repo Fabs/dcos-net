@@ -83,4 +83,5 @@ upstream_filter_fun(QueryLabels) ->
     end.
 
 zone_representation(ZoneLabels) ->
-   lists:foldr(fun(X,A) -> <<X/binary, ".", A/binary>> end, <<"">>, ZoneLabels).
+    <<".", Str/binary>> = << <<".", X/binary>> || X <- ZoneLabels >>,
+    Str.
