@@ -83,7 +83,8 @@ init(Parent, Protocol, Request, Fun) ->
             report_query_response_time(StartTime, Zone);
         _ ->
             Upstreams0 = take_upstreams(Upstreams),
-            external_resolve(Protocol, Upstreams0, Request, Fun, Zone),
+            FailMsg = failed_msg(Protocol, DNSMessage),
+            external_resolve(Protocol, Upstreams0, Request, Fun, FailMsg, Zone),
             report_query_response_time(StartTime, Zone)
     end.
 
@@ -117,63 +118,52 @@ internal_resolve(Protocol, DNSMessage) ->
     Response = erldns_handler:do_handle(DNSMessage, ?LOCALHOST),
     encode_message(Protocol, Response).
 
--spec(external_resolve(protocol(), [upstream()], binary(), reply_fun(), zone())-> ok).
-external_resolve(Protocol, Upstreams, Request, Fun, Zone) ->
+-spec(external_resolve(protocol(), [upstream()], binary(), reply_fun(), binary(), zone())-> ok).
+external_resolve(Protocol, Upstreams, Request, Fun, FailMsg, Zone) ->
     Workers =
         lists:map(fun (Upstream) ->
             Pid = start_worker(Protocol, Upstream, Request),
             MonRef = monitor(process, Pid),
             {Upstream, Pid, MonRef}
         end, Upstreams),
-    resolve_loop(Workers, Fun, Zone).
+    resolve_loop(Workers, Fun, FailMsg, Zone).
 
--spec(resolve_loop([{upstream(), pid(), reference()}], reply_fun(), zone()) -> ok).
-resolve_loop(Workers, Fun, Zone) ->
-    resolve_loop(Workers, Fun, Zone, unresolved).
+-spec(resolve_loop([{upstream(), pid(), reference()}], reply_fun(), binary(), zone()) -> ok).
+resolve_loop(Workers, Fun, FailMsg, Zone) ->
+    resolve_loop(Workers, Fun, FailMsg, Zone, unresolved).
 
--spec(resolve_loop([{upstream(), pid(), reference()}], reply_fun(), zone(), atom()) -> ok).
-resolve_loop([], _Fun, _Zone, resolved) ->
+-spec(resolve_loop([{upstream(), pid(), reference()}], reply_fun(), binary(), zone(), forward_status()) -> ok).
+resolve_loop([], _Fun, _Zone, _FailMsg, resolved) ->
     ok;
-resolve_loop([], _Fun, Zone, Status) ->
+resolve_loop([], Fun, Zone, FailMsg, Status) ->
+    ok = reply(Fun, FailMsg),
     prometheus_counter:inc(dns_forwarder_failures_total, [Zone, Status]);
-resolve_loop(Workers, Fun, Zone, Status) ->
+resolve_loop(Workers, Fun, Zone, FailMsg, Status) ->
     receive
         {reply, Pid, Response} ->
             {value, {Upstream, Pid, MonRef}, Workers0} =
                 lists:keytake(Pid, 2, Workers),
-            reply(Fun, Response),
+            ok = reply(Fun, Response),
             erlang:demonitor(MonRef, [flush]),
             report_status([?MODULE, Upstream, successes]),
-            resolve_loop(Workers0, fun ok_reply_fun/1, Zone, resolved);
-        {timeout, Pid} ->
-            {value, {Upstream, Pid, MonRef}, Workers0} =
-                lists:keytake(Pid, 2, Workers),
-            erlang:demonitor(MonRef, [flush]),
-            report_status([?MODULE, Upstream, failures]),
-            Status0 = resolve_loop_status(Status, timeout),
-            resolve_loop(Workers0, Fun, Zone, Status0);
+            resolve_loop(Workers0, fun ok_reply_fun/1, FailMsg, Zone, resolved);
         {'DOWN', MonRef, process, Pid, _Reason} ->
             {value, {Upstream, Pid, MonRef}, Workers0} =
                 lists:keytake(Pid, 2, Workers),
             report_status([?MODULE, Upstream, failures]),
-            Status0 = resolve_loop_status(Status, failure),
-            resolve_loop(Workers0, Fun, Zone, Status0)
+            Status0 = case Status of
+                resolved -> resolved;
+                _ -> timeout
+            end,
+            resolve_loop(Workers0, Fun, FailMsg, Zone, Status0)
     after 2 * ?TIMEOUT ->
         lists:foreach(fun ({Upstream, Pid, MonRef}) ->
             erlang:demonitor(MonRef, [flush]),
             report_status([?MODULE, Upstream, failures]),
             Pid ! {timeout, self()}
-        end, Workers),
-        prometheus_counter:inc(dns_forwarder_failures_total, [Zone, timeout])
+        end, Workers)
     end.
 
-% Once a Worker resolves, then the status is always going to be resolved
-% otherwise the Status is the most recent resolve failure
--spec(resolve_loop_status(forward_status(), forward_status()) -> forward_status()).
-resolve_loop_status(resolved, _Status) ->
-    resolved;
-resolve_loop_status(_PreviousStatus, NewStatus) ->
-     NewStatus.
 %%%===================================================================
 %%% Workers
 %%%===================================================================
@@ -220,10 +210,9 @@ udp_worker(StartTime, Pid, Socket, Upstream = {IP, Port}) ->
                 Pid ! {reply, self(), Response},
                 report_latency([?MODULE, Upstream, latency], StartTime);
             {timeout, Pid} ->
-                lager:warning("DNS worker ~p timed out", [Upstream]),
-                Pid ! {timeout, self()}
+                lager:warning("DNS worker ~p timed out", [Upstream])
         after ?TIMEOUT ->
-            Pid ! {timeout, self()}
+            ok
         end
     after
         gen_udp:close(Socket)
@@ -263,10 +252,9 @@ tcp_worker(StartTime, Pid, Socket, Upstream) ->
             {tcp_error, Socket, Reason} ->
                 lager:warning("DNS worker [tcp] ~p failed with ~p", [Upstream, Reason]);
             {timeout, Pid} ->
-                lager:warning("DNS worker [tcp] ~p timed out", [Upstream]),
-                Pid ! {timeout, self()}
+                lager:warning("DNS worker [tcp] ~p timed out", [Upstream])
         after Timeout ->
-            Pid ! {timeout, self()}
+            ok
         end
     after
         gen_tcp:close(Socket)
@@ -277,11 +265,6 @@ report_latency(Metric, StartTime) ->
     Diff = max(erlang:monotonic_time(millisecond) - StartTime, 0),
     dcos_dns_metrics:update(Metric, Diff, ?HISTOGRAM).
 
-report_query_response_time(StartTime, Zone) ->
-    Diff = max(erlang:monotonic_time(millisecond) - StartTime, 0),
-    DiffSeconds = Diff/1000,
-    prometheus_histogram:observe(dns_forwarder_requests_duration_seconds,
-                                 [Zone], DiffSeconds).
 %%%===================================================================
 %%% Upstreams functions
 %%%===================================================================
@@ -386,5 +369,11 @@ init_metrics() ->
                               {labels, [zone]},
                               {duration_unit, false},
                               {buckets, [0.001, 0.005, 0.010, 0.050, 0.100, 0.500, 1.000, 5.000]},
-                              {help, "Duration of successful DNS queries"}]),
-    ok.
+                              {help, "Duration of successful DNS queries"}]).
+
+-spec(report_query_response_time(pos_integer(), zone()) -> ok).
+report_query_response_time(StartTime, Zone) ->
+    Diff = max(erlang:monotonic_time(millisecond) - StartTime, 0),
+    DiffSeconds = Diff/1000,
+    prometheus_histogram:observe(dns_forwarder_requests_duration_seconds,
+                                 [Zone], DiffSeconds).

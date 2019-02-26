@@ -37,13 +37,6 @@ default_resolvers() ->
     Resolvers = application:get_env(?APP, upstream_resolvers, Defaults),
     lists:map(fun validate_upstream/1, Resolvers).
 
-%% .
-%% zk.
-%% localhost.
-%% spartan.
-%% (dcos|l4lb|thisnode|component|mesos|dclb).thisdcos.directory.
-%% (dcos|l4lb|thisnode|component|mesos|dclb).<id>.dcos.directory.
-%% dclb.thisdcos.global.
 %% @private
 -spec(find_upstream_zone(Labels :: [binary()]) -> forward()).
 find_upstream_zone([<<"mesos">>|_]) ->
@@ -56,17 +49,18 @@ find_upstream_zone([<<"spartan">>|_]) ->
     {internal, <<"spartan.">>};
 find_upstream_zone([<<"directory">>, <<"thisdcos">>, Zone |_]) ->
     % care about the cripto id
-    {internal, <<Zone/binary, "thisdcos.directory.">>};
+    {internal, <<Zone/binary, ".thisdcos.directory.">>};
 find_upstream_zone([<<"global">>, <<"thisdcos">>, Zone |_]) ->
     {internal, <<Zone/binary, "thisdcos.global.">>};
 find_upstream_zone([<<"directory">>, <<"dcos">>, Zone |_]) ->
-    {internal, <<Zone/binary, "dcos.directory.">>};
+    {internal, <<Zone/binary, ".dcos.directory.">>};
 find_upstream_zone(Labels) ->
     case find_custom_upstream(Labels) of
-        {[], Zone} ->
-            {default_resolvers(), Zone};
-        {Resolvers, Zone} ->
+        {[], _ZoneLabels} ->
+            {default_resolvers(), <<".">>};
+        {Resolvers, ZoneLabels} ->
             lager:debug("resolving ~p with custom upstream: ~p", [Labels, Resolvers]),
+            Zone = zone_representation(ZoneLabels),
             {Resolvers, Zone}
     end.
 
@@ -82,9 +76,11 @@ upstream_filter_fun(QueryLabels) ->
     fun(ZoneLabels, Upstream, Acc) ->
         case lists:prefix(ZoneLabels, QueryLabels) of
             true ->
-                Zone = lists:foldr(fun(X,A) -> <<X/binary, ".", A/binary>> end, <<"">>, ZoneLabels),
-                {Upstream, Zone};
+                {Upstream, ZoneLabels};
             false ->
                 Acc
         end
     end.
+
+zone_representation(ZoneLabels) ->
+   lists:foldr(fun(X,A) -> <<X/binary, ".", A/binary>> end, <<"">>, ZoneLabels).
