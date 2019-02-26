@@ -60,7 +60,7 @@ find_upstream_zone(Labels) ->
             {default_resolvers(), <<".">>};
         {Resolvers, ZoneLabels} ->
             lager:debug("resolving ~p with custom upstream: ~p", [Labels, Resolvers]),
-            Zone = zone_representation(ZoneLabels),
+            Zone = dcos_net_utils:string_join(ZoneLabels ++ [<<"">>], <<".">>),
             {Resolvers, Zone}
     end.
 
@@ -81,7 +81,3 @@ upstream_filter_fun(QueryLabels) ->
                 Acc
         end
     end.
-
-zone_representation(ZoneLabels) ->
-    <<".", Str/binary>> = << <<".", X/binary>> || X <- ZoneLabels >>,
-    Str.

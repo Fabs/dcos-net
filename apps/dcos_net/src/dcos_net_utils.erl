@@ -7,7 +7,8 @@
 -export([
     complement/2,
     system/1,
-    system/2
+    system/2,
+    string_join/2
 ]).
 
 %%%===================================================================
@@ -105,3 +106,15 @@ system_timeout_test() ->
     end.
 
 -endif.
+
+%%%===================================================================
+%%% String functions
+%%%===================================================================
+
+-spec(string_join([binary()], binary()) -> binary()).
+string_join([], _S) -> <<"">>;
+string_join([<<"">>], Separator) -> Separator;
+string_join(BinaryStrings, S) ->
+    N = floor(bit_size(S)/8),
+    <<S:N/binary, JoinedBs/binary>> = << <<S/binary, Bs/binary>> || Bs <- BinaryStrings >>,
+    JoinedBs.
