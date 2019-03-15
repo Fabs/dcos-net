@@ -10,7 +10,8 @@
     resolve/1,
     resolve/2,
     resolve/3,
-    get_leader_addr/0
+    get_leader_addr/0,
+    init_metrics/0
 ]).
 
 %% DNS Zone functions
@@ -180,6 +181,7 @@ push_prepared_zone(ZoneName, Records) ->
                     lager:notice(
                         "DNS Zone ~s was updated (~p records, sha: ~s)",
                         [ZoneName, length(Records), bin_to_hex(Hash)]),
+                    prometheus_gauge:set(dns, zone_records, [ZoneName], length(Records)),
                     ok;
                 {error, Error} ->
                     lager:error(
@@ -198,3 +200,15 @@ push_prepared_zone(ZoneName, Records) ->
 bin_to_hex(Bin) ->
     Bin0 = << <<(integer_to_binary(N, 16))/binary>> || <<N:4>> <= Bin >>,
     cowboy_bstr:to_lower(Bin0).
+
+%%%===================================================================
+%%% Metrics functions
+%%%===================================================================
+
+-spec(init_metrics() -> ok).
+init_metrics() ->
+    prometheus_gauge:new([
+        {registry, dns},
+        {name, zone_records},
+        {labels, [zone]},
+        {help, "Number of DNS records"}]).

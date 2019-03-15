@@ -14,6 +14,7 @@ init([true]) ->
     %% Configure metrics.
     dcos_dns_metrics:setup(),
     dcos_dns_handler:init_metrics(),
+    dcos_dns:init_metrics(),
 
     %% Setup ready.spartan zone / record
     ok = dcos_dns_zone_setup(),
