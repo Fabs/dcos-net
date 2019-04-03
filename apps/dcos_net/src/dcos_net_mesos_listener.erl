@@ -963,9 +963,9 @@ start_stream() ->
     case dcos_net_mesos:call(Request, [{timeout, infinity}], Opts) of
         {ok, Ref, Pid} ->
             try
-                prometheus_gauge:set(
+                prometheus_boolean:set(
                   mesos_listener, listening_leader_boolean,
-                  [], 1)
+                  [], true)
             catch error:_Error ->
                     ok
             end,
@@ -975,9 +975,9 @@ start_stream() ->
             {ok, handle_heartbeat(State)};
         {error, {http_status, {_HTTPVersion, 307, _StatusStr}, _Data}} ->
             try
-                prometheus_gauge:set(
+                prometheus_boolean:set(
                   mesos_listener, listening_leader_boolean,
-                  [], 1)
+                  [], false)
             catch error:_Error ->
                     ok
             end,
@@ -1078,7 +1078,7 @@ init_metrics_received() ->
         {name, failures_total},
         {labels, []},
         {help, "Total number of failures"}]),
-    prometheus_gauge:new([
+    prometheus_boolean:new([
         {registry, mesos_listener},
         {name, listening_leader_boolean},
         {labels, []},
