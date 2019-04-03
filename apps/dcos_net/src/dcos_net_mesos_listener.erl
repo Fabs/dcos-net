@@ -138,7 +138,11 @@ terminate(normal, _State) ->
     ok;
 terminate(Reason, _State) ->
     lager:error("Mesos Listener terminated with error: ~p", [Reason]),
-    prometheus_counter:inc(mesos_listener, failures_total, [], 1),
+    try
+        prometheus_counter:inc(mesos_listener, failures_total, [], 1)
+    catch error:_Error ->
+        ok
+    end,
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -958,17 +962,25 @@ start_stream() ->
     Request = #{type => <<"SUBSCRIBE">>},
     case dcos_net_mesos:call(Request, [{timeout, infinity}], Opts) of
         {ok, Ref, Pid} ->
-            prometheus_gauge:set(
-              mesos_listener, listening_leader_boolean,
-              [], 1),
+            try
+                prometheus_gauge:set(
+                  mesos_listener, listening_leader_boolean,
+                  [], 1)
+            catch error:_Error ->
+                    ok
+            end,
             httpc:stream_next(Pid),
             erlang:monitor(process, Pid),
             State = #state{pid=Pid, ref=Ref},
             {ok, handle_heartbeat(State)};
         {error, {http_status, {_HTTPVersion, 307, _StatusStr}, _Data}} ->
-            prometheus_gauge:set(
-              mesos_listener, listening_leader_boolean,
-              [], 0),
+            try
+                prometheus_gauge:set(
+                  mesos_listener, listening_leader_boolean,
+                  [], 1)
+            catch error:_Error ->
+                    ok
+            end,
             {error, redirect};
         {error, Error} ->
             {error, Error}
