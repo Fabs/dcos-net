@@ -84,11 +84,19 @@ is_leader() ->
 
 -spec(poll() -> {ok, #{task_id() => task()}} | {error, term()}).
 poll() ->
-    case poll_imp() of
-        {ok, Obj} ->
-            {ok, from_state(Obj)};
-        {error, Error} ->
-            {error, Error}
+    Begin = erlang:monotonic_time(),
+    {Status, Payload, Size} = poll_imp(),
+    prometheus_counter:inc(
+        mesos_listener, call_received_bytes_total, [],
+        Size),
+    prometheus_summary:observe(
+        mesos_listener, call_duration_seconds, [],
+        erlang:monotonic_time() - Begin),
+    case Status of
+        ok ->
+            {ok, from_state(Payload)};
+        error ->
+            {error, Payload}
     end.
 
 -spec(from_state(jiffy:object()) -> #{task_id() => task()}).
@@ -741,48 +749,29 @@ handle_task_status(TaskStatus) ->
 %%% Poll Functions
 %%%===================================================================
 
--spec(poll_imp() -> {ok, jiffy:object()} | {error, term()}).
+-spec(poll_imp() -> {ok, jiffy:object(), integer()} | {error, term(), integer()}).
 poll_imp() ->
-    Begin = erlang:monotonic_time(),
     IsMaster = dcos_net_app:is_master(),
     case dcos_net_mesos:call(#{type => <<"GET_STATE">>}) of
-        {ok, Obj, Size1} when IsMaster ->
-            prometheus_summary:observe(
-                mesos_listener, call_duration_seconds, [],
-                erlang:monotonic_time() - Begin),
-            prometheus_count:inc(
-                mesos_listener, call_received_bytes_total, [],
-                Size1),
-            {ok, Obj};
-        {ok, #{<<"get_state">> := State} = Obj, Size1} ->
+        {ok, {Obj, GetStateSize}} when IsMaster ->
+            {ok, Obj, GetStateSize};
+        {ok, {#{<<"get_state">> := State} = Obj, GetStateSize}} ->
             case dcos_net_mesos:call(#{type => <<"GET_AGENT">>}) of
-                {ok, #{<<"get_agent">> := Agent}, Size2} ->
+                {ok, {#{<<"get_agent">> := Agent}, GetAgentSize}} ->
                     GetAgents = #{<<"agents">> => [Agent]},
                     State0 = State#{<<"get_agents">> => GetAgents},
                     Obj0 = Obj#{<<"get_state">> => State0},
-                    prometheus_summary:observe(
-                        mesos_listener, call_duration_seconds, [],
-                        erlang:monotonic_time() - Begin),
-                    prometheus_counter:inc(
-                        mesos_listener, call_received_bytes_total, [],
-                        Size1 + Size2),
-                    {ok, Obj0};
+                    {ok, Obj0, GetAgentSize + GetStateSize};
                 {error, Error} ->
-                    prometheus_summary:observe(
-                        mesos_listener, call_duration_seconds, [],
-                        erlang:monotonic_time() - Begin),
                     prometheus_counter:inc(
-                       mesos_listener, call_failures_total, [], 1),
-                    {error, Error}
+                        mesos_listener, call_failures_total, [], 1),
+                    {error, Error, 0}
             end;
         {error, Error} ->
-            prometheus_summary:observe(
-                mesos_listener, call_duration_seconds, [],
-                erlang:monotonic_time() - Begin),
             prometheus_counter:inc(
                 mesos_listener, call_failures_total, [], 1),
-            {error, Error}
-    end.
+            {error, Error, 0}
+   end.
 
 -spec(from_state_imp(jiffy:object()) -> #{task_id() => task()}).
 from_state_imp(Data) ->
@@ -1054,7 +1043,8 @@ init_metrics() ->
     init_metrics_mesos_polled_state(),
     init_metrics_mesos_operator_calls(),
     init_metrics_pubsub(),
-    init_metrics_received().
+    init_metrics_received(),
+    ok.
 
 init_metrics_mesos_state() ->
     prometheus_gauge:new([
@@ -1076,31 +1066,31 @@ init_metrics_mesos_state() ->
 
 init_metrics_mesos_polled_state() ->
     prometheus_counter:new([
-       {registry, l4lb},
-       {name, poll_failures_total},
-       {help, "Total number of poll errors."}]),
+        {registry, l4lb},
+        {name, poll_failures_total},
+        {help, "Total number of poll errors."}]),
     prometheus_summary:new([
-       {registry, l4lb},
-       {name, poll_process_duration_seconds},
-       {help, "Time to process state from mesos."}]),
+        {registry, l4lb},
+        {name, poll_process_duration_seconds},
+        {help, "Time to process state from mesos."}]),
     prometheus_summary:new([
-       {registry, l4lb},
-       {name, poll_request_duration_seconds},
-       {help, "Time to request state from mesos."}]).
+        {registry, l4lb},
+        {name, poll_request_duration_seconds},
+        {help, "Time to request state from mesos."}]).
 
 init_metrics_mesos_operator_calls() ->
     prometheus_summary:new([
-       {registry, mesos_listener},
-       {name, call_duration_seconds},
-       {help, "The time spent with calls to the mesos operator API."}]),
+        {registry, mesos_listener},
+        {name, call_duration_seconds},
+        {help, "The time spent with calls to the mesos operator API."}]),
     prometheus_counter:new([
-       {registry, mesos_listener},
-       {name, call_received_bytes_total},
-       {help, "Total number of bytes received from mesos operator API."}]),
+        {registry, mesos_listener},
+        {name, call_received_bytes_total},
+        {help, "Total number of bytes received from mesos operator API."}]),
     prometheus_counter:new([
-       {registry, l4lb},
-       {name, call_failures_total},
-       {help, "Total number of failures calling mesos operator API."}]).
+        {registry, mesos_listener},
+        {name, call_failures_total},
+        {help, "Total number of failures calling mesos operator API."}]).
 
 
 init_metrics_pubsub() ->

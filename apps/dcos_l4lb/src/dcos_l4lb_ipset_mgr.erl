@@ -396,7 +396,8 @@ cleanup() ->
 
 -spec(init_metrics() -> ok).
 init_metrics() ->
-    prometheus_summary:new([
-       {registry, l4lb},
-       {name, ipset_updates_seconds},
-       {help, "The time spent updating ipset configuration."}]).
+    prometheus_summary:declare([
+        {registry, l4lb},
+        {name, ipset_updates_seconds},
+        {help, "The time spent updating ipset configuration."}]),
+    ok.

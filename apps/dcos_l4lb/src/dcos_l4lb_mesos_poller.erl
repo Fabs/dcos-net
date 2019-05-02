@@ -92,20 +92,18 @@ handle_poll(true) ->
     Begin = erlang:monotonic_time(),
     try dcos_net_mesos_listener:poll() of
         {error, Error} ->
-            prometheus_summary:observe(
-              l4lb, poll_request_duration_seconds,
-              [], erlang:monotonic_time() - Begin),
             prometheus_counter:inc(
-              l4lb, poll_failures_total,
-              [], 1),
+                l4lb, poll_failures_total,
+                [], 1),
             lager:warning("Unable to poll mesos agent: ~p", [Error]);
         {ok, Tasks} ->
-            prometheus_summary:observe(
-                l4lb, poll_request_duration_seconds,
-                [], erlang:monotonic_time() - Begin),
             handle_poll_state(Tasks)
     catch error:bad_agent_id ->
         lager:warning("Mesos agent is not ready")
+    after
+        prometheus_summary:observe(
+            l4lb, poll_request_duration_seconds,
+            [], erlang:monotonic_time() - Begin)
     end.
 
 -spec(handle_poll_state(#{task_id() => task()}) -> ok).
@@ -123,8 +121,8 @@ handle_poll_state(Tasks) ->
     VIPs = collect_vips(HealthyTasks),
     ok = push_vips(VIPs),
     prometheus_summary:observe(
-      l4lb, poll_process_duration_seconds,
-      [], erlang:monotonic_time() - Begin).
+        l4lb, poll_process_duration_seconds,
+        [], erlang:monotonic_time() - Begin).
 
 -spec(is_healthy(task_id(), task()) -> boolean()).
 is_healthy(_TaskId, Task) ->
@@ -163,11 +161,17 @@ collect_vips(Tasks) ->
 -spec(collect_vips(task_id(), task(), VIPs) -> VIPs
     when VIPs :: #{key() => [backend()]}).
 collect_vips(TaskId, Task, VIPs) ->
-    lists:foldl(fun (Port, Acc) ->
+    VIPs1 = lists:foldl(fun (Port, Acc) ->
         lists:foldl(fun (VIPLabel, Bcc) ->
             collect_vips(TaskId, Task, Port, VIPLabel, Bcc)
         end, Acc, maps:get(vip, Port, []))
-    end, VIPs, maps:get(ports, Task, [])).
+    end, VIPs, maps:get(ports, Task, [])),
+
+    BackendsCount = lists:foldl(fun (BEs, TotalBEs) ->
+        TotalBEs + length(BEs)
+    end, 0, maps:values(VIPs1)),
+    prometheus_gauge:set(l4lb, local_backends, [], BackendsCount),
+    VIPs1.
 
 -spec(collect_vips(task_id(), task(), task_port(), VIPLabel, VIPs) -> VIPs
     when VIPs :: #{key() => [backend()]}, VIPLabel :: binary()).
@@ -202,7 +206,7 @@ key(Task, PortObj, VIPLabel) ->
 backends(Key, Task, PortObj) ->
     IsIPv6Enabled = dcos_l4lb_config:ipv6_enabled(),
     AgentIP = maps:get(agent_ip, Task),
-    Backends = case maps:find(host_port, PortObj) of
+    case maps:find(host_port, PortObj) of
         error ->
             Port = maps:get(port, PortObj),
             [ {AgentIP, {TaskIP, Port}}
@@ -210,9 +214,7 @@ backends(Key, Task, PortObj) ->
                validate_backend_ip(IsIPv6Enabled, Key, TaskIP) ];
         {ok, HostPort} ->
             [{AgentIP, {AgentIP, HostPort}}]
-    end,
-    prometheus_gauge:set(l4lb, local_backends, [], length(Backends)),
-    Backends.
+    end.
 
 -spec(validate_backend_ip(boolean(), key(), inet:ip_address()) -> boolean()).
 validate_backend_ip(true, {_Protocol, {name, _Name}, _VIPPort}, _TaskIP) ->
@@ -314,22 +316,23 @@ log_ops(Key, {remove_all, Backends}) ->
 
 -spec(init_metrics() -> ok).
 init_metrics() ->
-    prometheus_gauge:new([
+    prometheus_gauge:declare([
         {registry, l4lb},
         {name, local_vips},
         {help, "The number of local VIPs."}]),
-    prometheus_gauge:new([
-       {registry, l4lb},
-       {name, local_tasks},
-       {help, "The number of local tasks."}]),
-    prometheus_gauge:new([
-       {registry, l4lb},
-       {name, local_healthy_tasks},
-       {help, "The number of local healthy tasks."}]),
-    prometheus_gauge:new([
+    prometheus_gauge:declare([
+        {registry, l4lb},
+        {name, local_tasks},
+        {help, "The number of local tasks."}]),
+    prometheus_gauge:declare([
+        {registry, l4lb},
+        {name, local_healthy_tasks},
+        {help, "The number of local healthy tasks."}]),
+    prometheus_gauge:declare([
         {registry, l4lb},
         {name, local_backends},
-        {help, "The number of local backends."}]).
+        {help, "The number of local backends."}]),
+   ok.
 
 %%%===================================================================
 %%% Test functions

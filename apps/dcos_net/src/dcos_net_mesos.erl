@@ -18,13 +18,12 @@ poll(URIPath) ->
     handle_response(Response).
 
 -spec(call(jiffy:json_term()) ->
-    {ok, jiffy:json_term()} | {error, Reason :: term()}).
+    {ok, {jiffy:json_term(), integer()}} | {ok, reference(), pid()} | {error, term()}).
 call(Request) ->
     call(Request, [], []).
 
-% fix line columns
 -spec(call(jiffy:json_term(), httpc:http_options(), httpc:options()) ->
-    {ok, jiffy:json_term(), integer()} | {ok, reference(), pid()} | {error, term()}).
+    {ok, {jiffy:json_term(), integer()}} | {ok, reference(), pid()} | {error, term()}).
 call(Request, HTTPOptions, Opts) ->
     ContentType = "application/json",
     HTTPRequest = {"/api/v1", [], ContentType, jiffy:encode(Request)},
@@ -35,7 +34,7 @@ call(Request, HTTPOptions, Opts) ->
         {http, {Ref, stream_start, _Headers, Pid}} ->
             {ok, Ref, Pid};
         {http, {Ref, {{_Version, 200, _Reason}, _Headers, Data}}} ->
-            {ok, jiffy:decode(Data, [return_maps]), byte_size(Data)};
+            {ok, {jiffy:decode(Data, [return_maps]), byte_size(Data)}};
         {http, {Ref, {StatusLine, _Headers, Data}}} ->
             {error, {http_status, StatusLine, Data}};
         {http, {Ref, {error, Error}}} ->

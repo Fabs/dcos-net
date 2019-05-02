@@ -308,6 +308,7 @@ to_name(Binaries) ->
 -spec(init_metrics() -> ok).
 init_metrics() ->
     prometheus_counter:declare([
-       {registry, l4lb},
-       {name, vips_updates_total},
-       {help, "Total number of times vips were updated."}]).
+        {registry, l4lb},
+        {name, vips_updates_total},
+        {help, "Total number of times vips were updated."}]),
+    ok.
