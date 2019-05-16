@@ -141,19 +141,21 @@ MINIDCOS_AGENTS ?= 1
 MINIDCOS_PUBLIC_AGENTS ?= 0
 MINIDCOS_NODE ?= master_0
 MINIDCOS_WEB_PORT ?= 443
-MINIDCOS_INTALLER ?= dcos_generate_config.sh
+MINIDCOS_INSTALLER ?= dcos_generate_config.sh
+MINIDCOS_EE_LICENSE ?=  ""
 
 minidcos-create:
-	@ minidcos docker inspect \
+	minidcos docker inspect \
 	      --cluster-id $(MINIDCOS_CLUSTER_ID) \
 	      > /dev/null 2> /dev/null || \
-	( minidcos docker create $(MINIDCOS_INTALLER) \
+	( minidcos docker create $(MINIDCOS_INSTALLER) \
 	      --transport $(MINIDCOS_TRANSPORT) \
 	      --masters $(MINIDCOS_MASTERS) \
 	      --agents $(MINIDCOS_AGENTS) \
 	      --public-agents $(MINIDCOS_PUBLIC_AGENTS) \
 	      --cluster-id $(MINIDCOS_CLUSTER_ID) \
 	      --custom-volume $(MINIDCOS_CUSTOM_VOLUME) \
+	      --license-key $(MINIDCOS_EE_LICENSE) \
 	      $(MINIDCOS_OPTS) && \
 	  minidcos docker wait \
 	      --transport $(MINIDCOS_TRANSPORT) \

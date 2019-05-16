@@ -97,15 +97,10 @@ handle_poll(true) ->
             handle_poll_state(Tasks)
     catch error:bad_agent_id ->
         lager:warning("Mesos agent is not ready")
-    after
-        prometheus_summary:observe(
-            l4lb, poll_request_duration_seconds,
-            [], erlang:monotonic_time() - Begin)
     end.
 
 -spec(handle_poll_state(#{task_id() => task()}) -> ok).
 handle_poll_state(Tasks) ->
-    Begin = erlang:monotonic_time(),
     HealthyTasks = maps:filter(fun is_healthy/2, Tasks),
     prometheus_gauge:set(l4lb, local_tasks, [], maps:size(Tasks)),
     prometheus_gauge:set(
@@ -117,9 +112,9 @@ handle_poll_state(Tasks) ->
 
     VIPs = collect_vips(HealthyTasks),
     ok = push_vips(VIPs),
-    prometheus_summary:observe(
-        l4lb, poll_process_duration_seconds,
-        [], erlang:monotonic_time() - Begin).
+    prometheus_gauge:set(
+        l4lb, local_backends, [],
+        lists:sum([length(BEs) || BEs <- maps:values(VIPs)])).
 
 -spec(is_healthy(task_id(), task()) -> boolean()).
 is_healthy(_TaskId, Task) ->
@@ -158,17 +153,12 @@ collect_vips(Tasks) ->
 -spec(collect_vips(task_id(), task(), VIPs) -> VIPs
     when VIPs :: #{key() => [backend()]}).
 collect_vips(TaskId, Task, VIPs) ->
-    VIPs1 = lists:foldl(fun (Port, Acc) ->
+    lists:foldl(fun (Port, Acc) ->
+        [], erlang:monotonic_time() - Begin).
         lists:foldl(fun (VIPLabel, Bcc) ->
             collect_vips(TaskId, Task, Port, VIPLabel, Bcc)
         end, Acc, maps:get(vip, Port, []))
-    end, VIPs, maps:get(ports, Task, [])),
-
-    BackendsCount = lists:foldl(fun (BEs, TotalBEs) ->
-        TotalBEs + length(BEs)
-    end, 0, maps:values(VIPs1)),
-    prometheus_gauge:set(l4lb, local_backends, [], BackendsCount),
-    VIPs1.
+    end, VIPs, maps:get(ports, Task, [])).
 
 -spec(collect_vips(task_id(), task(), task_port(), VIPLabel, VIPs) -> VIPs
     when VIPs :: #{key() => [backend()]}, VIPLabel :: binary()).
@@ -329,14 +319,6 @@ init_metrics() ->
         {registry, l4lb},
         {name, local_backends},
         {help, "The number of local backends."}]),
-    prometheus_summary:declare([
-        {registry, l4lb},
-        {name, poll_process_duration_seconds},
-        {help, "Time to process state from Mesos."}]),
-    prometheus_summary:declare([
-        {registry, l4lb},
-        {name, poll_request_duration_seconds},
-        {help, "Time to request state from Mesos."}]),
    ok.
 
 %%%===================================================================
