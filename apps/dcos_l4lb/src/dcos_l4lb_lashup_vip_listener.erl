@@ -97,7 +97,6 @@ handle_event(#{value := RawVIPs}) ->
     try
         prometheus_counter:inc(l4lb, vips_updates_total, [], 1)
     catch _Error ->
-        lager:notice("Metrics crash"),
         ok
     end,
     VIPs = process_vips(RawVIPs),

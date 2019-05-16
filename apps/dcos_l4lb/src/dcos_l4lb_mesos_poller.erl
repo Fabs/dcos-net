@@ -92,9 +92,6 @@ handle_poll(true) ->
     Begin = erlang:monotonic_time(),
     try dcos_net_mesos_listener:poll() of
         {error, Error} ->
-            prometheus_counter:inc(
-                l4lb, poll_failures_total,
-                [], 1),
             lager:warning("Unable to poll mesos agent: ~p", [Error]);
         {ok, Tasks} ->
             handle_poll_state(Tasks)
@@ -332,6 +329,14 @@ init_metrics() ->
         {registry, l4lb},
         {name, local_backends},
         {help, "The number of local backends."}]),
+    prometheus_summary:declare([
+        {registry, l4lb},
+        {name, poll_process_duration_seconds},
+        {help, "Time to process state from Mesos."}]),
+    prometheus_summary:declare([
+        {registry, l4lb},
+        {name, poll_request_duration_seconds},
+        {help, "Time to request state from Mesos."}]),
    ok.
 
 %%%===================================================================

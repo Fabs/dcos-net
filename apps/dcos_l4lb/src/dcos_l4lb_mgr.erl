@@ -710,7 +710,7 @@ init_metrics() ->
     prometheus_gauge:declare([
         {registry, l4lb},
         {name, backends},
-        {help, "The number of Backends."}]),
+        {help, "The number of backends."}]),
     prometheus_summary:declare([
         {registry, l4lb},
         {name, update_vips_seconds},
@@ -747,7 +747,7 @@ init_unreachable_metrics() ->
     prometheus_gauge:declare([
         {registry, l4lb},
         {name, unreachable_nodes},
-        {help, "Current number of Unreachable Nodes."}]),
+        {help, "Current number of unreachable nodes."}]),
     ok.
 
 %%%===================================================================
